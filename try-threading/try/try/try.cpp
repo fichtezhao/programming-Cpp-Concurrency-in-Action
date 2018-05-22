@@ -26,7 +26,7 @@ std::mutex mtx;
 std::condition_variable cv;
 bool ready = false;
 
-void print_id(int id) {
+void slaves(int id) {
 	std::unique_lock<std::mutex> lck(mtx);
 	//do sth #1
 	std::cout << "thread " << id << " creation" <<'\n';
@@ -36,14 +36,17 @@ void print_id(int id) {
 	std::cout << "thread " << id << " notified " << "\n";
 }
 
-void go() {
+void do_something() {
 
 	std::unique_lock<std::mutex> lck(mtx);
-	for (int i=1 ;i<100*100;i++)
-		std::cout << "wait tick " << i <<"\r";
-	std::cout << "\nmy work are done, then notify \n";
+	for (int i = 0; i < 100; i++)
+	{
+		cv.notify_one();
+		std::cout << i <<" slaves are released" << "\r";
+	}
+	std::cout << "all slaves are released, yeap!\n";
 	//release slaves
-	cv.notify_all();
+	//cv.notify_all();
 }
 
 int main()
@@ -51,13 +54,14 @@ int main()
 	std::thread threads[10];
 	// spawn 10 threads:
 	// crearted orderly
-	for (int i = 0; i<10; ++i)
-		threads[i] = std::thread(print_id, i);
+	for (int i = 0; i < 10; ++i)
+		threads[i] = std::thread(slaves, i);
 
 	std::cout << "10 threads ready to race...\n";
-	go();                       // go!
+	do_something(); // go!
 
 	for (auto& th : threads) th.join();
+	std::cout << "good threads" << std::endl;
 
 	return 0;
 }
