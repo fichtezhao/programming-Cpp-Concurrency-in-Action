@@ -25,6 +25,7 @@ struct sorter
             chunk_data,chunk_data.begin(),
             divide_point);
     
+		// refer to 9.06 ~ 9.08
         thread_pool::task_handle<std::list<T> > new_lower=
             pool.submit(
                 std::bind(

@@ -11,6 +11,7 @@ public:
         thread_cond(0),thread_cond_any(0)
     {}
 
+	// release signal
     void set()
     {
         flag.store(true,std::memory_order_relaxed);
@@ -25,6 +26,7 @@ public:
         }
     }
 
+	// wait until...
     template<typename Lockable>
     void wait(std::condition_variable_any& cv,Lockable& lk)
     {
@@ -69,6 +71,7 @@ public:
     // rest as before
 };
 
+// where use it ??
 template<typename Lockable>
 void interruptible_wait(std::condition_variable_any& cv,
                         Lockable& lk)

@@ -1,12 +1,18 @@
+// 9.08, enhanced of 9.06
+// refer to 9.07
+// e.g. 9.05
+
+// TODO
+
 class thread_pool
 {
     typedef function_wrapper task_type;
     
     std::atomic_bool done;
-    thread_safe_queue<task_type> pool_work_queue;
-    std::vector<std::unique_ptr<work_stealing_queue> > queues;
+    thread_safe_queue<task_type> pool_work_queue; //
+    std::vector<std::unique_ptr<work_stealing_queue> > queues; // 9.07, vector of queue
     std::vector<std::thread> threads;
-    join_threads joiner;
+    join_threads joiner; //
 
     static thread_local work_stealing_queue* local_work_queue;
     static thread_local unsigned my_index;

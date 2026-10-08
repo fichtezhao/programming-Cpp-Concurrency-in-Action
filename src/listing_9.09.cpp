@@ -1,3 +1,13 @@
+
+// 9.09
+// the final is 9.12, 9.13
+// use promise, and future to implement asynchronism, as the wrapper of interrupt_flag
+// use mtx,cv to implementation mgr of interrupt_flag
+// the standard promise and future, can not be interruptible 
+
+
+
+// enhanced in 9.11
 class interrupt_flag
 {
 public:
@@ -19,7 +29,7 @@ public:
                 p.set_value(&this_thread_interrupt_flag);
                 f();
             });
-        flag=p.get_future().get();
+        flag=p.get_future().get(); // ptr to interrupt_flag
     }
     void interrupt()
     {

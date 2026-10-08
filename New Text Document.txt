@@ -1,0 +1,8 @@
+
+
+https://en.wikipedia.org/wiki/Sieve_C%2B%2B_Parallel_Programming_System
+
+https://stackoverflow.com/questions/4792449/c0x-has-no-semaphores-how-to-synchronize-threads
+
+
+

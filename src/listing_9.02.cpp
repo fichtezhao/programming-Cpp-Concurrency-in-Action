@@ -1,3 +1,4 @@
+// 9.02
 #include <deque>
 #include <future>
 #include <memory>
@@ -5,6 +6,9 @@
 #include <iostream>
 #include <iostream>
 
+// TODO
+// what is its pros
+// since each thread execute different function code (std::move(...)), then no need be mutual exclusive
 class function_wrapper
 {
     struct impl_base {
@@ -42,14 +46,17 @@ public:
     function_wrapper& operator=(const function_wrapper&)=delete;
 };
 
+
+// TODO
+// packaged_task, and future are thread safe
+// once submit one task, will get one future, then can retrieve the task state
 class thread_pool
 {
 public:
     std::deque<function_wrapper> work_queue;
 
     template<typename FunctionType>
-    std::future<typename std::result_of<FunctionType()>::type>
-    submit(FunctionType f)
+    std::future<typename std::result_of<FunctionType()>::type> submit(FunctionType f)
     {
         typedef typename std::result_of<FunctionType()>::type result_type;
         
@@ -60,3 +67,5 @@ public:
     }
     // rest as before
 };
+
+// example, 9.03

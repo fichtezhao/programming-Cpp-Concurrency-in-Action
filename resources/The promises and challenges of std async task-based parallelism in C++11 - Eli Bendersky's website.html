@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:og="http://ogp.me/ns#" xmlns:fb="https://www.facebook.com/2008/fbml"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <title>The promises and challenges of std::async task-based parallelism in C++11 - Eli Bendersky's website</title>
+    <!-- Using the latest rendering mode for IE -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link href="https://eli.thegreenplace.net/favicon.ico" rel="icon">
+
+    <!-- Bootstrap -->
+        <link rel="stylesheet" href="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/bootstrap.css" type="text/css">
+    <link href="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/font-awesome.css" rel="stylesheet">
+
+    <link href="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/vs.css" rel="stylesheet">
+    <link rel="stylesheet" href="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/style.css" type="text/css">
+
+        <link href="https://eli.thegreenplace.net/feeds/all.atom.xml" type="application/atom+xml" rel="alternate" title="Eli Bendersky's website ATOM Feed">
+
+</head>
+<body>
+
+<div class="navbar navbar-default navbar-fixed-top" role="navigation">
+    <div class="container">
+        <div class="navbar-header">
+            <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-ex1-collapse">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+            </button>
+            <a href="https://eli.thegreenplace.net/" class="navbar-brand">
+                <img src="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/logosmall.png" width="32">
+Eli Bendersky's website            </a>
+        </div>
+        <div class="collapse navbar-collapse navbar-ex1-collapse">
+            <ul class="nav navbar-nav navbar-right">
+                <li>
+                    <a href="https://eli.thegreenplace.net/pages/about">
+                        <i class="fa fa-question"></i>
+                        <span class="icon-label">About</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="https://eli.thegreenplace.net/archives/all">
+                        <i class="fa fa-th-list"></i>
+                        <span class="icon-label">Archives</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+    </div>
+</div> <!-- /.navbar -->
+
+<div class="container">
+    <div class="row">
+    <section id="content">
+        <article>
+            <header class="page-header">
+                <h1>
+                    <a href="https://eli.thegreenplace.net/2016/the-promises-and-challenges-of-stdasync-task-based-parallelism-in-c11/" rel="bookmark" title="Permalink to The promises and challenges of std::async task-based parallelism in C++11">
+                        The promises and challenges of std::async task-based parallelism in C++11
+                    </a>
+                </h1>
+            </header>
+            <div class="entry-content">
+                <div class="panel">
+                    <div class="panel-body">
+<footer class="post-info">
+    <span class="published">
+        <i class="fa fa-calendar"></i>
+        <time> February 16, 2016 at 05:30</time>
+    </span>
+<span class="label label-default">Tags</span>
+    <a href="https://eli.thegreenplace.net/tag/c-c">C &amp; C++</a>
+        ,
+    <a href="https://eli.thegreenplace.net/tag/concurrency">Concurrency</a>
+</footer><!-- /.post-info -->                    </div>
+                </div>
+                <p>One of the biggest and most impactful changes C++11 heralds is a standardized
+threading library, along with a documented memory model for the language. While
+extremely useful and obviating the dilemma of non-portable code vs. third-party
+libraries for threading, this first edition of the threading libraries is not
+without kinks. This article is a brief overview of how C++11 tries to enable a
+"task-based parallelism" idiom with the introduction of <tt class="docutils literal"><span class="pre">std::async</span></tt>, and the
+challenges it runs into.</p>
+<p>Warning: this article is opinionated, especially its last third or so. I'll be
+happy to get corrections and suggestions in comments or email.</p>
+<div class="section" id="background-threads-vs-tasks">
+<h2>Background - threads vs. tasks</h2>
+<p>When I'm talking about "thread-based parallelism", I mean manual, low-level
+management of threads. Something like using pthreads or the Windows APIs for
+threads directly. You create threads, launch them, "join" them, etc. Even though
+threads are an <a class="reference external" href="http://eli.thegreenplace.net/2016/c11-threads-affinity-and-hyperthreading">OS abstraction</a>,
+this is as close as you can get to the machine. In such cases, the programmer
+knows (or better know!) exactly how many threads he has running at any given
+time, and has to take care of load-balancing the work between them.</p>
+<p>"Task-based parallelism" refers to a higher level of abstraction, where the
+programmer manages "tasks" - chunks of work that has to be done, while the
+library (or language) presents an API to launch these tasks. It is then the
+library's job to launch threads, make sure there are not too few or too many of
+them, make sure the work is reasonably load-balanced, and so on. For better or
+worse, this gives the programmer less low-level control over the system,
+but also higher-level, more convenient and safer APIs to work with. <a class="reference external" href="https://software.intel.com/en-us/blogs/2011/12/08/some-performance-advantages-of-using-a-task-based-parallelism-model">Some will
+claim</a>
+that this also leads to better performance, though this really depends on the
+application.</p>
+</div>
+<div class="section" id="threads-and-tasks-in-c-11">
+<h2>Threads and tasks in C++11</h2>
+<p>The C++11 thread library gives us a whole toolbox for working at the thread
+level. We have <tt class="docutils literal"><span class="pre">std::thread</span></tt> along with a horde of synchronization and
+signaling mechanisms, a well-defined memory model, thread-local data and atomic
+operations right there in the standard.</p>
+<p>C++11 also tries to provide a set of tools for task-based parallelism, revolving
+around <tt class="docutils literal"><span class="pre">std::async</span></tt>. It succeeds in some respects, and fails in others. I will
+go ahead and say in advance that I believe <tt class="docutils literal"><span class="pre">std::async</span></tt> is a very nice tool to
+replace direct <tt class="docutils literal"><span class="pre">std::thread</span></tt> usage on the low level. On the other hand, it is
+not really a good task-based parallelism abstraction. The rest of the article
+will cover these claims in detail.</p>
+</div>
+<div class="section" id="using-std-async-as-a-smarter-std-thread">
+<h2>Using std::async as a smarter std::thread</h2>
+<p>While it's great to have <tt class="docutils literal"><span class="pre">std::thread</span></tt> in standard C++, it's a fairly low
+level construct. As such, its usage is often more cumbersome than we'd want, and
+also more error-prone than we'd want. Therefore, an experienced programmer would
+sit down and come up with a slightly higher-level abstraction that makes C++
+threading a bit more pleasant and also safer. The good news is that someone has
+already written this abstraction, and even made it standard. It's called
+<tt class="docutils literal"><span class="pre">std::async</span></tt>.</p>
+<p>Here's a simple example of using a worker thread to perform some work - in this
+case add up integers in a vector <a class="footnote-reference" href="#id4" id="id1">[1]</a>:</p>
+<div class="highlight"><pre><span class="kt">void</span> <span class="nf">accumulate_block_worker</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">,</span> <span class="kt">int</span><span class="o">*</span> <span class="n">result</span><span class="p">)</span> <span class="p">{</span>
+  <span class="o">*</span><span class="n">result</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="nf">use_worker_in_std_thread</span><span class="p">()</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="kt">int</span> <span class="n">result</span><span class="p">;</span>
+  <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">worker</span><span class="p">(</span><span class="n">accumulate_block_worker</span><span class="p">,</span>
+                     <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="o">&amp;</span><span class="n">result</span><span class="p">);</span>
+  <span class="n">worker</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_thread computed "</span> <span class="o">&lt;&lt;</span> <span class="n">result</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>Straightforward enough. The thread is created and then immediately joined
+(waited upon to finish in a blocking manner). The result is communicated back
+to the caller via a pointer argument, since a <tt class="docutils literal"><span class="pre">std::thread</span></tt> cannot have a
+return value. This already points at a potential issue: when we write
+computation functions in C++ we usually employ the return value construct,
+rather than taking results by reference/pointer. Say we had a function already
+that did work, and was used in serial code, and we want to launch it in a
+<tt class="docutils literal"><span class="pre">std::thread</span></tt>. Since that function most likely returns its value, we'd need to
+either write a new version of it, or create some sort of wrapper.</p>
+<p>Here's an alternative using <tt class="docutils literal"><span class="pre">std::async</span></tt> and <tt class="docutils literal"><span class="pre">std::future</span></tt>:</p>
+<div class="highlight"><pre><span class="kt">int</span> <span class="nf">accumulate_block_worker_ret</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">void</span> <span class="nf">use_worker_in_std_async</span><span class="p">()</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span>
+      <span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_async computed "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>I'm passing the <tt class="docutils literal"><span class="pre">std::launch::async</span></tt> policy explicitly - more on this in the
+latter part of the article. The main thing to note here is that now the actual
+function launched in a thread is written in a natural way, returning the value
+it computed; no by-pointer output arguments in sight. <tt class="docutils literal"><span class="pre">std::async</span></tt> takes the
+return type of the function and returns it wrapped in a <tt class="docutils literal"><span class="pre">std::future</span></tt>, which
+is another handy abstraction. Read more about futures and promises in concurrent
+programming <a class="reference external" href="https://en.wikipedia.org/wiki/Futures_and_promises">on Wikipedia</a>. In the code above, the
+waiting for the computation thread to finish happens when we call <tt class="docutils literal">get()</tt> on
+the future.</p>
+<p>I like how the future decouples the <em>task</em> from the <em>result</em>. In more complex
+code, you can pass the future somewhere else, and it encapsulates both the
+thread to wait on and the result you'll end up with. The alternative of using
+<tt class="docutils literal"><span class="pre">std::thread</span></tt> directly is more cumbersome, because there are two things to
+pass around.</p>
+<p>Here is a contrived example, where a function launches threads but then wants to
+delegate waiting for them and getting the results to some other function. It
+represents many realistic scenarios where we want to launch tasks in one place
+but collect results in some other place. First, a version with <tt class="docutils literal"><span class="pre">std::thread</span></tt>:</p>
+<div class="highlight"><pre><span class="c1">// Demonstrates how to launch two threads and return two results to the caller</span>
+<span class="c1">// that will have to wait on those threads. Gives half the input vector to</span>
+<span class="c1">// one thread, and the other half to another.</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="o">&gt;</span>
+<span class="n">launch_split_workers_with_std_thread</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&amp;</span> <span class="n">v</span><span class="p">,</span>
+                                     <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;*</span> <span class="n">results</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="o">&gt;</span> <span class="n">threads</span><span class="p">;</span>
+  <span class="n">threads</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">accumulate_block_worker</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span>
+                       <span class="o">&amp;</span><span class="p">((</span><span class="o">*</span><span class="n">results</span><span class="p">)[</span><span class="mi">0</span><span class="p">]));</span>
+  <span class="n">threads</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">accumulate_block_worker</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">()</span> <span class="o">+</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span>
+                       <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="o">&amp;</span><span class="p">((</span><span class="o">*</span><span class="n">results</span><span class="p">)[</span><span class="mi">1</span><span class="p">]));</span>
+  <span class="k">return</span> <span class="n">threads</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="p">...</span>
+
+<span class="p">{</span>
+  <span class="c1">// Usage</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">results</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="o">&gt;</span> <span class="n">threads</span> <span class="o">=</span>
+      <span class="n">launch_split_workers_with_std_thread</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">results</span><span class="p">);</span>
+  <span class="k">for</span> <span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span> <span class="n">t</span> <span class="o">:</span> <span class="n">threads</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">t</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+  <span class="p">}</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"results from launch_split_workers_with_std_thread: "</span>
+            <span class="o">&lt;&lt;</span> <span class="n">results</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="s">" and "</span> <span class="o">&lt;&lt;</span> <span class="n">results</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>Note how the thread objects have to be propagated back to the caller (so the
+caller can <tt class="docutils literal">join</tt> them). Also, the result pointers have to be provided by
+the caller because otherwise they go out of scope <a class="footnote-reference" href="#id5" id="id2">[2]</a>.</p>
+<p>Now, the same operation using <tt class="docutils literal"><span class="pre">std::async</span></tt> and futures:</p>
+<div class="highlight"><pre><span class="k">using</span> <span class="n">int_futures</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+
+<span class="n">int_futures</span> <span class="nf">launch_split_workers_with_std_async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;&amp;</span> <span class="n">v</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">int_futures</span> <span class="n">futures</span><span class="p">;</span>
+  <span class="n">futures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span>
+                               <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">));</span>
+  <span class="n">futures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span>
+                               <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">()</span> <span class="o">+</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">/</span> <span class="mi">2</span><span class="p">));</span>
+  <span class="k">return</span> <span class="n">futures</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="p">...</span>
+
+<span class="p">{</span>
+  <span class="c1">// Usage</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">int_futures</span> <span class="n">futures</span> <span class="o">=</span> <span class="n">launch_split_workers_with_std_async</span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"results from launch_split_workers_with_std_async: "</span>
+            <span class="o">&lt;&lt;</span> <span class="n">futures</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">" and "</span> <span class="o">&lt;&lt;</span> <span class="n">futures</span><span class="p">[</span><span class="mi">1</span><span class="p">].</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>Once again, the code is cleaner and more concise. Bundling the thread handle
+with the result it's expected to produce just makes more sense.</p>
+<p>If we want to implement more complex result sharing schemes, things
+get even trickier. Say we want two different threads to wait on the computation
+result. You can't just call <tt class="docutils literal">join</tt> on a thread from multiple other threads. Or
+at least, not easily. A thread that was already joined will throw an exception
+if another <tt class="docutils literal">join</tt> is attempted. With futures, we have <tt class="docutils literal"><span class="pre">std::shared_future</span></tt>,
+which wraps a <tt class="docutils literal"><span class="pre">std::future</span></tt> and permits concurrent access from multiple
+threads that may want to get the future's result.</p>
+</div>
+<div class="section" id="setting-a-timeout-on-retrieving-task-results">
+<h2>Setting a timeout on retrieving task results</h2>
+<p>Say we launched a thread to do a computation. At some point we'll have to wait
+for it to finish in order to obtain the result. The wait may be trivial if we
+set the program up in a certain way, but it can actually take time in some
+situations. Can we set a timeout on this wait so that we don't block for too
+long? With the pure <tt class="docutils literal"><span class="pre">std::thread</span></tt> solution, it won't be easy. You can't set a
+timeout on the <tt class="docutils literal">join()</tt> method, and other solutions are convoluted (such as
+setting up a "cooperative" timeout by sharing a condition variable with the
+launched thread).</p>
+<p>With futures returned from <tt class="docutils literal"><span class="pre">std::async</span></tt>, nothing could be easier, since
+<tt class="docutils literal"><span class="pre">std::future</span></tt> has a <tt class="docutils literal">wait_for()</tt> method that takes a timeout:</p>
+<div class="highlight"><pre><span class="kt">int</span> <span class="nf">accumulate_block_worker_ret</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">3</span><span class="p">));</span>
+  <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">**</span> <span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span>
+      <span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+  <span class="k">while</span> <span class="p">(</span><span class="n">fut</span><span class="p">.</span><span class="n">wait_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">!=</span> <span class="n">std</span><span class="o">::</span><span class="n">future_status</span><span class="o">::</span><span class="n">ready</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"... still not ready</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_async computed "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="section" id="propagating-exceptions-between-threads">
+<h2>Propagating exceptions between threads</h2>
+<p>If you're writing C++ code with exceptions enabled, you are kinda "living on
+the edge". You always have to keep a mischievous imaginary friend on your left
+shoulder who will remind you that at any point in the program an exception can
+be thrown and then "how are you handling it?". Threads add another dimension
+to this (already difficult) problem. What happens when a function launched in
+a <tt class="docutils literal"><span class="pre">std::thread</span></tt> throws an exception?</p>
+<div class="highlight"><pre><span class="kt">void</span> <span class="nf">accumulate_block_worker</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">,</span> <span class="kt">int</span><span class="o">*</span> <span class="n">result</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">throw</span> <span class="n">std</span><span class="o">::</span><span class="n">runtime_error</span><span class="p">(</span><span class="s">"something broke"</span><span class="p">);</span>
+  <span class="o">*</span><span class="n">result</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="p">...</span>
+
+<span class="p">{</span>
+  <span class="c1">// Usage.</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="kt">int</span> <span class="n">result</span><span class="p">;</span>
+  <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">worker</span><span class="p">(</span><span class="n">accumulate_block_worker</span><span class="p">,</span>
+                     <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="o">&amp;</span><span class="n">result</span><span class="p">);</span>
+  <span class="n">worker</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_thread computed "</span> <span class="o">&lt;&lt;</span> <span class="n">result</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>This:</p>
+<div class="highlight"><pre>terminate called after throwing an instance of 'std::runtime_error'
+  what():  something broke
+Aborted (core dumped)
+</pre></div>
+<p>Ah, silly me, I didn't catch the exception. Let's try this alternative usage:</p>
+<div class="highlight"><pre><span class="n">try</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="kr">thread</span> <span class="n">worker</span><span class="p">(</span><span class="n">accumulate_block_worker</span><span class="p">,</span>
+                     <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="o">&amp;</span><span class="n">result</span><span class="p">);</span>
+  <span class="n">worker</span><span class="p">.</span><span class="n">join</span><span class="p">();</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_thread computed "</span> <span class="o">&lt;&lt;</span> <span class="n">result</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">runtime_error</span><span class="o">&amp;</span> <span class="n">error</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"caught an error: "</span> <span class="o">&lt;&lt;</span> <span class="n">error</span><span class="p">.</span><span class="n">what</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>Nope:</p>
+<div class="highlight"><pre>terminate called after throwing an instance of 'std::runtime_error'
+  what():  something broke
+Aborted (core dumped)
+</pre></div>
+<p>What's going on? Well, as the C++ standard clearly states, "~thread(), if
+joinable(), calls std::terminate()". So trying to catch the exception in another
+thread won't help.</p>
+<p>While the example shown here is synthetic, there are many real-world cases where
+code executed in a thread can throw an exception. In regular, non-threaded call,
+we may reasonably expect that this exception should be handled somewhere higher
+up the call stack. If the code runs in a thread, however, this assumption is
+broken.</p>
+<p>It means that we should wrap the function running in the new thread in
+additional code that will catch all exceptions and somehow transfer them to the
+calling thread. Yet another "result" to return, as if returning the actual
+result of the computation wasn't cumbersome enough.</p>
+<p>Once again, <tt class="docutils literal"><span class="pre">std::async</span></tt> to the rescue! Let's try this again:</p>
+<div class="highlight"><pre><span class="kt">int</span> <span class="nf">accumulate_block_worker_ret</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">throw</span> <span class="n">std</span><span class="o">::</span><span class="n">runtime_error</span><span class="p">(</span><span class="s">"something broke"</span><span class="p">);</span>
+  <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="p">...</span>
+
+<span class="p">{</span>
+  <span class="c1">// Usage.</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">try</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span>
+        <span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_async computed "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">runtime_error</span><span class="o">&amp;</span> <span class="n">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"caught an error: "</span> <span class="o">&lt;&lt;</span> <span class="n">error</span><span class="p">.</span><span class="n">what</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+<p>Now we get:</p>
+<div class="highlight"><pre>caught an error: something broke
+</pre></div>
+<p>The exception was propagated to the calling thread through the <tt class="docutils literal"><span class="pre">std::future</span></tt>
+and re-thrown when its <tt class="docutils literal">get()</tt> method is called.</p>
+<p>This is also the place to mention that the C++11 thread library provides many
+low-level building blocks for implementing high-level threading and task
+constructs. Returning a <tt class="docutils literal"><span class="pre">std::future</span></tt> from <tt class="docutils literal"><span class="pre">std::async</span></tt> is a fairly
+high-level abstraction, tailored for a specific kind of task management. If you
+want to implement something more advanced, like a special kind of concurrent
+queue that manages tasks, you'll be happy to hear that tools like
+<tt class="docutils literal"><span class="pre">std::promise</span></tt> and <tt class="docutils literal"><span class="pre">std::packaged_task</span></tt> are right there in the standard
+library to make your life more convenient. They let you associate functions with
+futures, and set exceptions separately from real results on those futures. I'll
+leave a deeper treatment of these topics to another day.</p>
+</div>
+<div class="section" id="but-is-this-real-task-based-parallelism">
+<h2>... but is this <em>real</em> task-based parallelism?</h2>
+<p>So we've seen how <tt class="docutils literal"><span class="pre">std::async</span></tt> helps us write robust threaded programs with
+smaller code compared to "raw" <tt class="docutils literal"><span class="pre">std::thread</span></tt>s. If your threading needs are
+covered by <tt class="docutils literal"><span class="pre">std::async</span></tt>, you should definitely use it instead of toiling to
+re-implement the same niceties with raw threads and other low-level constructs.
+But does <tt class="docutils literal"><span class="pre">std::async</span></tt> enable real task-based parallelism, wherein you can
+nonchalantly hand it functions and expect it to load-distribute them for you
+over some existing thread pool to use OS resources efficiently? Unfortunately,
+no. Well, at least in the current version of the C++ standard, not yet.</p>
+<p>There are many problems. Let's start with the launch policy.</p>
+<p>In all the samples shown above, I'm explicitly passing the <tt class="docutils literal">async</tt> policy to
+<tt class="docutils literal"><span class="pre">std::async</span></tt> to circumvent the issue. <tt class="docutils literal">async</tt> is not the only policy it
+supports. The other one is <tt class="docutils literal">deferred</tt>, and the default is actually <tt class="docutils literal">async |
+deferred</tt>, meaning that we leave it to the runtime to decide. Except that we
+shouldn't.</p>
+<p>The <tt class="docutils literal">deferred</tt> policy means that the task will run lazily on the calling
+thread only when <tt class="docutils literal">get()</tt> is called on the future it returns. This is
+dramatically different from the <tt class="docutils literal">async</tt> policy in many respects, so just
+letting the runtime choose either sound like it may complicate programming.
+Consider the <tt class="docutils literal">wait_for</tt> example I've shown above. Let's modify it to launch
+the accumulation task with a <tt class="docutils literal">deferred</tt> policy:</p>
+<div class="highlight"><pre><span class="kt">int</span> <span class="nf">accumulate_block_worker_ret</span><span class="p">(</span><span class="kt">int</span><span class="o">*</span> <span class="n">data</span><span class="p">,</span> <span class="kt">size_t</span> <span class="n">count</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">this_thread</span><span class="o">::</span><span class="n">sleep_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">3</span><span class="p">));</span>
+  <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">accumulate</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span> <span class="o">+</span> <span class="n">count</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">**</span> <span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">v</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">};</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span>
+      <span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">deferred</span><span class="p">,</span> <span class="n">accumulate_block_worker_ret</span><span class="p">,</span> <span class="n">v</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">v</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+  <span class="k">while</span> <span class="p">(</span><span class="n">fut</span><span class="p">.</span><span class="n">wait_for</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">chrono</span><span class="o">::</span><span class="n">seconds</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">!=</span> <span class="n">std</span><span class="o">::</span><span class="n">future_status</span><span class="o">::</span><span class="n">ready</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"... still not ready</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"use_worker_in_std_async computed "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>Running it:</p>
+<div class="highlight"><pre>$ ./using-std-future
+... still not ready
+... still not ready
+... still not ready
+... still not ready
+... still not ready
+... still not ready
+... still not ready
+^C
+</pre></div>
+<p>Oops, what's going on? The problem is that with the <tt class="docutils literal">deferred</tt> policy, the
+call to <tt class="docutils literal">wait_for</tt> on the future doesn't actually run the task. Only <tt class="docutils literal">get()</tt>
+does. So we're stuck in an infinite loop. This can be fixed, of course (by also
+checking for a <tt class="docutils literal"><span class="pre">std::future_status::deferred</span></tt> status from <tt class="docutils literal">wait_for()</tt>), but
+requires extra thinking and extra handling. It's not just a matter of not
+getting stuck in a loop, it's also a matter of what <em>do</em> we do in case the task
+is deferred? Handling both async and deferred tasks in the same caller code
+becomes tricky. When we use the default policy, we let the runtime decide when
+it wants to use <tt class="docutils literal">deferred</tt> instead of <tt class="docutils literal">async</tt>, so bugs like this may be
+difficult to find since they will only manifest occasionally under certain
+system loads.</p>
+</div>
+<div class="section" id="tasks-and-tls">
+<h2>Tasks and TLS</h2>
+<p>The C++11 standard also added TLS support with the <tt class="docutils literal">thread_local</tt> keyword,
+which is great because TLS is a useful technique that hasn't been standardized
+so far. Let's try a synthetic example showing how it mixes with <tt class="docutils literal"><span class="pre">std::async</span></tt>'s
+launch policices:</p>
+<div class="highlight"><pre><span class="n">thread_local</span> <span class="kt">int</span> <span class="n">tls_var</span><span class="p">;</span>
+
+<span class="kt">int</span> <span class="nf">read_tls_var</span><span class="p">()</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="n">tls_var</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">**</span> <span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">tls_var</span> <span class="o">=</span> <span class="mi">50</span><span class="p">;</span>
+
+  <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">deferred</span><span class="p">,</span> <span class="n">read_tls_var</span><span class="p">);</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"got from read_tls_var: "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>When run, this shows the value 50, because <tt class="docutils literal">read_tls_var</tt> runs in the calling
+thread. If we change the policy to <tt class="docutils literal"><span class="pre">std::launch::async</span></tt>, it will instead show
+0. That's because <tt class="docutils literal">read_tls_var</tt> now runs in a new thread where <tt class="docutils literal">tls_var</tt>
+wasn't set to 50 by <tt class="docutils literal">main</tt>. Now imagine the runtime decides if your task runs
+in the same thread or another thread. How useful are TLS variables in this
+scenario? Not very much, unfortunately. Well unless you love non-determinism and
+multi-threading Heisenbugs :-)</p>
+</div>
+<div class="section" id="tasks-and-mutexes">
+<h2>Tasks and mutexes</h2>
+<p>Here's another fun example, this time with mutexes. Consider this piece of
+code:</p>
+<div class="highlight"><pre><span class="kt">int</span> <span class="nf">task</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">recursive_mutex</span><span class="o">&amp;</span> <span class="n">m</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">m</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+  <span class="k">return</span> <span class="mi">42</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span><span class="o">**</span> <span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">recursive_mutex</span> <span class="n">m</span><span class="p">;</span>
+  <span class="n">m</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span>
+
+  <span class="n">std</span><span class="o">::</span><span class="n">future</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span> <span class="n">fut</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">deferred</span><span class="p">,</span> <span class="n">task</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">ref</span><span class="p">(</span><span class="n">m</span><span class="p">));</span>
+  <span class="n">std</span><span class="o">::</span><span class="n">cout</span> <span class="o">&lt;&lt;</span> <span class="s">"got from task: "</span> <span class="o">&lt;&lt;</span> <span class="n">fut</span><span class="p">.</span><span class="n">get</span><span class="p">()</span> <span class="o">&lt;&lt;</span> <span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+<p>It runs and shows 42 because the same thread can lock a <tt class="docutils literal"><span class="pre">std::recursive_mutex</span></tt>
+multiple times. If we switch the launch policy to <tt class="docutils literal">async</tt>, the program
+deadlocks because a different thread <em>cannot</em> lock a <tt class="docutils literal"><span class="pre">std::recursive_mutex</span></tt>
+while the calling thread is holding it. Contrived? Yes. Can this happen in real
+code - yes, of course. If you're thinking to yourself "he's cheating, what is
+this weird <tt class="docutils literal"><span class="pre">std::recursive_mutex</span></tt> example specifically tailored to show a
+problem...", I assure you that a regular <tt class="docutils literal"><span class="pre">std::mutex</span></tt> has its own problems. It
+has to be unlocked in the thread it was locked in. So if <tt class="docutils literal">task</tt> unlocked a
+regular <tt class="docutils literal"><span class="pre">std::mutex</span></tt> that was locked by <tt class="docutils literal">main</tt> instead, we'd also have an
+issue. Unlocking a mutex in a different thread is <em>undefined behavior</em>. With the
+default launch policy, this undefined behavior would happen just sometimes.
+Lovely.</p>
+<p>Bartosz Milewski has some additional discussion of these problems <a class="reference external" href="http://bartoszmilewski.com/2009/03/03/broken-promises-c0x-futures/">here</a> and
+<a class="reference external" href="http://bartoszmilewski.com/2012/05/11/the-future-of-c-concurrency-and-parallelism/">also here</a>.
+Note that they will haunt more advanced thread strategies as well. Thread pools
+reuse the same thread handles for different tasks, so they'll also have to face
+TLS and mutex thread-locality issues. Whatever the adopted solution ends up
+being, some additional constraints will have to be introduced to make sure it's
+not <em>too</em> easy to shoot yourself in the foot.</p>
+</div>
+<div class="section" id="is-std-async-fundamentally-broken">
+<h2>Is std::async fundamentally broken?</h2>
+<p>Due to the problems highlighted above, I'd consider the default launch policy of
+<tt class="docutils literal"><span class="pre">std::async</span></tt> <em>broken</em> and would never use it in production code. I'm not the
+only one thinking this way. Scott Meyers, in his "Effective Modern C++",
+recommends the following wrapper to launch tasks:</p>
+<div class="highlight"><pre><span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="n">F</span><span class="p">,</span> <span class="k">typename</span><span class="p">...</span> <span class="n">Ts</span><span class="o">&gt;</span>
+<span class="kr">inline</span> <span class="k">auto</span> <span class="n">reallyAsync</span><span class="p">(</span><span class="n">F</span><span class="o">&amp;&amp;</span> <span class="n">f</span><span class="p">,</span> <span class="n">Ts</span><span class="o">&amp;&amp;</span><span class="p">...</span> <span class="n">params</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="n">std</span><span class="o">::</span><span class="n">async</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">launch</span><span class="o">::</span><span class="n">async</span><span class="p">,</span> <span class="n">std</span><span class="o">::</span><span class="n">forward</span><span class="o">&lt;</span><span class="n">F</span><span class="o">&gt;</span><span class="p">(</span><span class="n">f</span><span class="p">),</span>
+                    <span class="n">std</span><span class="o">::</span><span class="n">forward</span><span class="o">&lt;</span><span class="n">Ts</span><span class="o">&gt;</span><span class="p">(</span><span class="n">params</span><span class="p">)...);</span>
+<span class="p">}</span>
+</pre></div>
+<p>Use this instead of raw <tt class="docutils literal"><span class="pre">std::async</span></tt> calls to ensure that the tasks are always
+launched in fresh threads, so that we can reason about our program more
+deterministically.</p>
+<p>The authors of gcc came to realize this as well, <a class="reference external" href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=51617">and switched the libstdc++
+default launch policy</a> to
+<tt class="docutils literal"><span class="pre">std::launch::async</span></tt> in mid-2015. In fact, as the discussion in that bug
+highlights, <tt class="docutils literal"><span class="pre">std::async</span></tt> came close to being deprecated in the next C++
+standard, since the standards committee realized it's not really possible to
+implement real task-based parallelism with it without non-deterministic and
+undefined behavior in some corner cases. And it's the role of the standards
+committee to ensure all corners are covered <a class="footnote-reference" href="#id6" id="id3">[3]</a>.</p>
+<p>It's evident from online sources that <tt class="docutils literal"><span class="pre">std::async</span></tt> was a bit rushed into the
+C++11 standard, when the committee didn't have enough time to standardize a more
+comprehensive library solution such as thread pools. <tt class="docutils literal"><span class="pre">std::async</span></tt> was put
+there as a compromise, as part of a collection of low-level building blocks that
+could be used to build higher-level abstractions later. But actually, it can't.
+Or at least not easily. "Real" task-based parallel systems feature things like
+task migration between threads, task stealing queues, etc. It will just keep
+hitting the problems highlighted above (TLS, mutexes, etc.) in real user code. A
+more comprehensive overhaul is required. Luckily, this is exactly what the
+standards commitee is toiling on - robust high-level concurrency primitives for
+the C++17 version of the standard.</p>
+</div>
+<div class="section" id="conclusion-and-practical-advice">
+<h2>Conclusion and practical advice</h2>
+<p>This article started by expounding the virtues of <tt class="docutils literal"><span class="pre">std::async</span></tt> compared to
+plain <tt class="docutils literal"><span class="pre">std::thread</span></tt>s, but finished by pointing out numerous problems with
+<tt class="docutils literal"><span class="pre">std::async</span></tt> that one needs to be aware of. So, what do we do?</p>
+<p>I actually think that by being careful to stay within the well-defined limits of
+<tt class="docutils literal"><span class="pre">std::async</span></tt>, we can enjoy its benefits without running into the gotchas.
+Specifically:</p>
+<ol class="arabic simple">
+<li>Prefer <tt class="docutils literal"><span class="pre">std::async</span></tt> to <tt class="docutils literal"><span class="pre">std::thread</span></tt>. Futures are just too useful to
+ignore; especially if your code deals with exception handling, this is the
+only sane way to stay safe. Results provided by different threads should be
+wrapped in futures.</li>
+<li>Always use the <tt class="docutils literal"><span class="pre">std::launch::async</span></tt> policy with <tt class="docutils literal"><span class="pre">std::async</span></tt> if you
+actually want multi-threading. Do not rely on the default policy. Do not
+use <tt class="docutils literal">deferred</tt> unless you have very special needs. Remember that
+<tt class="docutils literal">deferred</tt> is just syntactic sugar over holding a function pointer to call
+it later.</li>
+<li>If you need a real thread pool or some other higher-level concurrency
+construct, use a library or roll your own. Standard objects like
+<tt class="docutils literal"><span class="pre">std::future</span></tt>, <tt class="docutils literal"><span class="pre">std::promise</span></tt> and <tt class="docutils literal"><span class="pre">std::packaged_task</span></tt> can be very
+helpful.</li>
+</ol>
+<hr class="docutils">
+<table class="docutils footnote" frame="void" id="id4" rules="none">
+<colgroup><col class="label"><col></colgroup>
+<tbody valign="top">
+<tr><td class="label"><a class="fn-backref" href="#id1">[1]</a></td><td><p class="first">Here and elsewhere, I'm trying to strip the code down to bare essentials,
+in order to demonstrate the actual threading concepts the article focuses
+on. C++ has a lot of complexities which I'm occasionally leaving behind,
+on purpose. For example the accumulator worker discussed here is not very
+generic or STL-y. Rewriting it to be templated and acting on iterators
+instead of pointer + size is left as an exercise for the diligent reader.</p>
+<p class="last">Full code samples for this post are available at <a class="reference external" href="https://github.com/eliben/code-for-blog/tree/master/2016/std-async">https://github.com/eliben/code-for-blog/tree/master/2016/std-async</a></p>
+</td></tr>
+</tbody>
+</table>
+<table class="docutils footnote" frame="void" id="id5" rules="none">
+<colgroup><col class="label"><col></colgroup>
+<tbody valign="top">
+<tr><td class="label"><a class="fn-backref" href="#id2">[2]</a></td><td>Alternatively, <tt class="docutils literal">launch_split_workers_with_std_thread</tt> could return a
+vector of thread/result pairs. However, multiple return values in C++
+are messy no matter how you go at them, so it wouldn't result in much
+cleaner code. If you want to say "let's put them together in a class",
+then you're getting close to implementing <tt class="docutils literal"><span class="pre">std::future</span></tt> yourself :-)</td></tr>
+</tbody>
+</table>
+<table class="docutils footnote" frame="void" id="id6" rules="none">
+<colgroup><col class="label"><col></colgroup>
+<tbody valign="top">
+<tr><td class="label"><a class="fn-backref" href="#id3">[3]</a></td><td><p class="first">To be completely fair, there's another problem with <tt class="docutils literal"><span class="pre">std::async</span></tt> that
+was the main driver for the call to deprecate it - the "waiting
+destructor" problem with the futures returned by <tt class="docutils literal"><span class="pre">std::async</span></tt>. There
+are many discussions online about this issue. A couple I recommend are
+<a class="reference external" href="http://scottmeyers.blogspot.com/2013/03/stdfutures-from-stdasync-arent-special.html">this one by Scott Meyers</a>
+and <a class="reference external" href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2013/n3780.pdf">this SG1 paper by Nicolai Josuttis</a>.</p>
+<p>The gist of the issue is that a <tt class="docutils literal"><span class="pre">std::future</span></tt> returned by
+<tt class="docutils literal"><span class="pre">std::async</span></tt> will block in its destructor until the launched thread
+joins. While this behavior is important in order to ensure we don't have
+a runaway thread that accesses deallocated data, it also has its problems
+since some code may not like being blocked unexpectedly. And recall that
+a destructor is also called when an exception happens - another
+complication. In addition to the links above, also read <a class="reference external" href="http://scottmeyers.blogspot.com/2013/03/thread-handle-destruction-and.html">this other
+article by Meyers</a>
+to get a clearer understanding of the issue.</p>
+<p class="last">While the C++ standards committee came dangerously close to deprecating
+<tt class="docutils literal"><span class="pre">std::async</span></tt> for this reason, it seems that it has survived for now,
+with <a class="reference external" href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2013/n3773.pdf">a proposal</a> to
+have two different kinds of futures in the standard library, and changing
+<tt class="docutils literal"><span class="pre">std::async</span></tt> to return a <tt class="docutils literal">waiting_future</tt> type, to mark this wait
+explicitly. In any case, be wary of this problem.</p>
+</td></tr>
+</tbody>
+</table>
+</div>
+
+            </div>
+            <!-- /.entry-content -->
+<hr>
+<div class="dotted-links">
+<p class="align-center">
+For comments, please send me
+<a href="mailto:eliben@gmail.com"><i class="fa fa-envelope-o"></i> an email</a>,
+or reach out on <a href="https://twitter.com/elibendersky">on Twitter</a>.
+</p>
+</div>        </article>
+    </section>
+
+    </div>
+</div>
+<footer>
+   <div class="container">
+      <hr>
+      <div class="row">
+         <div class="col-xs-10">
+            © 2003-2018 Eli Bendersky
+         </div>
+         <div class="col-xs-2"><p class="pull-right"><i class="fa fa-arrow-up"></i> <a href="#">Back to top</a></p></div>
+      </div>
+   </div>
+</footer>
+<script async="" src="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/analytics.js"></script><script src="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/jquery-2.js"></script>
+
+<!-- Include all compiled plugins (below), or include individual files as needed -->
+<script src="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/bootstrap.js"></script>
+
+<!-- Enable responsive features in IE8 with Respond.js (https://github.com/scottjehl/Respond) -->
+<script src="The%20promises%20and%20challenges%20of%20std%20async%20task-based%20parallelism%20in%20C++11%20-%20Eli%20Bendersky's%20website_files/respond.js"></script>
+
+<script type="text/javascript">
+
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-54426790-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+</body></html>

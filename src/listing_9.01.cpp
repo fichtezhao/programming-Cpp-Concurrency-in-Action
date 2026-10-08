@@ -1,9 +1,10 @@
 class thread_pool
 {
-    std::atomic_bool done;
-    thread_safe_queue<std::function<void()> > work_queue;
+    std::atomic_bool done; // for simple type, convenient
+	// since each thread execute the same function code, then must be mutual exclusive
+    thread_safe_queue<std::function<void()> > work_queue; // just dummy function so far 
     std::vector<std::thread> threads;
-    join_threads joiner;
+    join_threads joiner; // ?
 
     void worker_thread()
     {
@@ -12,11 +13,11 @@ class thread_pool
             std::function<void()> task;
             if(work_queue.try_pop(task))
             {
-                task();
+                task(); // one thread one task
             }
             else
             {
-                std::this_thread::yield();
+                std::this_thread::yield(); // wait until...??
             }
         }
     }
@@ -45,9 +46,13 @@ public:
         done=true;
     }
 
+	// fill task from external
     template<typename FunctionType>
     void submit(FunctionType f)
     {
         work_queue.push(std::function<void()>(f));
     }
 };
+
+// example
+
